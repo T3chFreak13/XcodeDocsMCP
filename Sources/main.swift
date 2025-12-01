@@ -10,10 +10,17 @@ struct JSONRPCRequest: Codable {
 }
 
 struct JSONRPCResponse: Codable {
-    let jsonrpc: String = "2.0"
+    let jsonrpc: String
     let id: RequestID?
     let result: AnyCodable?
     let error: JSONRPCError?
+
+    init(id: RequestID?, result: AnyCodable?, error: JSONRPCError?) {
+        self.jsonrpc = "2.0"
+        self.id = id
+        self.result = result
+        self.error = error
+    }
 }
 
 struct JSONRPCError: Codable {
