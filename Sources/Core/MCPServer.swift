@@ -748,17 +748,25 @@ public final class MCPServer {
 
         // Try Objective-C headers
         let headerPath = "\(sdkPath)/System/Library/Frameworks/\(module).framework/Headers"
+        let frameworkPath = "\(sdkPath)/System/Library/Frameworks/\(module).framework"
+        let moduleExists = fileManager.fileExists(atPath: frameworkPath)
+
         if fileManager.fileExists(atPath: headerPath) {
             let headerResult = await searchSymbolInHeaders(symbol: symbol, headerPath: headerPath, module: module)
-            // Prefer Objective-C result if it's not "not found"
-            if !headerResult.contains("not found") {
+            // Return header result if we found something
+            if !headerResult.contains("not found in \(module) headers") {
                 return headerResult
             }
         }
 
-        // Return Swift result if we have one (may contain suggestions), otherwise error
+        // Return Swift result if we have one (may contain suggestions)
         if let result = swiftResult {
             return result
+        }
+
+        // Module exists but symbol not found
+        if moduleExists {
+            return "Symbol '\(symbol)' not found in module '\(module)'. The symbol may be private, or try a different spelling."
         }
 
         return "Module '\(module)' not found in SDK. Use list_frameworks to see available modules."
@@ -881,23 +889,37 @@ public final class MCPServer {
     }
 
     private func searchSymbolInHeaders(symbol: String, headerPath: String, module: String) async -> String {
+        // First, check if there's a dedicated header file for this symbol (e.g., CFString.h for CFString)
+        let dedicatedHeaderPath = "\(headerPath)/\(symbol).h"
+        if FileManager.default.fileExists(atPath: dedicatedHeaderPath) {
+            if let result = await extractDocumentationFromHeader(headerFile: dedicatedHeaderPath, symbol: symbol, module: module) {
+                return result
+            }
+        }
+
+        // Try to find an @interface/class declaration with documentation
+        let interfaceResult = await searchInterfaceInHeaders(symbol: symbol, headerPath: headerPath, module: module)
+        if let result = interfaceResult {
+            return result
+        }
+
+        // Fallback to simple grep search
+        // Use shell with glob pattern instead of grep -r, which has issues with SDK paths
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/grep")
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        // Escape special regex chars in symbol for grep, and escape single quotes for shell
+        let escapedSymbol = symbol.replacingOccurrences(of: "'", with: "'\\''")
         process.arguments = [
-            "-r", "-n", "-A", "5", "-B", "2",
-            "--include=*.h",
-            symbol,
-            headerPath
+            "-c",
+            "grep -n -A 5 -B 10 '\(escapedSymbol)' \"\(headerPath)\"/*.h 2>/dev/null || true"
         ]
 
         let pipe = Pipe()
         process.standardOutput = pipe
-        // Discard stderr to avoid potential deadlock (we don't need it)
         process.standardError = FileHandle.nullDevice
 
         do {
             try process.run()
-            // Read output before waitUntilExit to avoid pipe buffer deadlock
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             process.waitUntilExit()
 
@@ -907,14 +929,340 @@ public final class MCPServer {
                 return "Symbol '\(symbol)' not found in \(module) headers."
             }
 
-            // Truncate if too long
-            let truncated = String(output.prefix(3000))
-            let suffix = output.count > 3000 ? "\n... (truncated)" : ""
-
-            return "Found '\(symbol)' in \(module) headers:\n\n```objc\n\(truncated)\(suffix)\n```"
+            // Try to extract documentation from the grep output
+            let formatted = formatHeaderSearchResult(output: output, symbol: symbol, module: module)
+            return formatted
         } catch {
             return "Error searching headers: \(error.localizedDescription)"
         }
+    }
+
+    private func extractDocumentationFromHeader(headerFile: String, symbol: String, module: String) async -> String? {
+        guard let content = try? String(contentsOfFile: headerFile, encoding: .utf8) else {
+            return nil
+        }
+
+        let lines = content.components(separatedBy: .newlines)
+        var result: [String] = ["# \(symbol)"]
+        result.append("**Kind:** C/Objective-C Type")
+        result.append("**Framework:** \(module)")
+
+        let fileName = (headerFile as NSString).lastPathComponent
+        result.append("**Header:** \(fileName)")
+
+        // Extract all comment blocks and find the documentation (not copyright)
+        var allComments: [[String]] = []
+        var currentComment: [String] = []
+        var inComment = false
+
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+
+            // Start of comment block
+            if trimmed.hasPrefix("/*") && !inComment {
+                inComment = true
+                currentComment = [trimmed]
+                if trimmed.hasSuffix("*/") {
+                    inComment = false
+                    allComments.append(currentComment)
+                    currentComment = []
+                }
+                continue
+            }
+
+            // Inside comment
+            if inComment {
+                currentComment.append(trimmed)
+                if trimmed.contains("*/") {
+                    inComment = false
+                    allComments.append(currentComment)
+                    currentComment = []
+                }
+            }
+        }
+
+        // Find the first documentation comment (skip copyright blocks)
+        var meaningfulDoc: String = ""
+        for comment in allComments {
+            let commentText = comment.joined(separator: "\n").lowercased()
+            // Skip copyright/license comments
+            if commentText.contains("copyright") && commentText.contains("apple") && comment.count < 15 {
+                continue
+            }
+            if commentText.contains("apache license") || commentText.contains("contributors.txt") {
+                continue
+            }
+
+            // This looks like actual documentation
+            let docText = comment
+                .map { line -> String in
+                    var cleaned = line
+                    cleaned = cleaned.replacingOccurrences(of: "/*!", with: "")
+                    cleaned = cleaned.replacingOccurrences(of: "/**", with: "")
+                    cleaned = cleaned.replacingOccurrences(of: "/*", with: "")
+                    cleaned = cleaned.replacingOccurrences(of: "*/", with: "")
+                    if cleaned.hasPrefix("*") {
+                        cleaned = String(cleaned.dropFirst()).trimmingCharacters(in: .whitespaces)
+                    }
+                    return cleaned
+                }
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n")
+
+            if docText.count > 100 {  // Only use substantial comments as documentation
+                meaningfulDoc = docText
+                break
+            }
+        }
+
+        if !meaningfulDoc.isEmpty {
+            // Limit documentation length
+            let truncatedDoc = meaningfulDoc.count > 2000
+                ? String(meaningfulDoc.prefix(2000)) + "\n... (truncated)"
+                : meaningfulDoc
+            result.append("\n**Documentation:**\n\(truncatedDoc)")
+        }
+
+        // Find the typedef or main declaration for this symbol
+        var declarations: [String] = []
+        var seenDeclarations = Set<String>()
+
+        for (index, line) in lines.enumerated() {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+
+            // Look for typedef with the symbol name at the start (not just referenced)
+            if trimmed.hasPrefix("typedef") && trimmed.contains(symbol) {
+                if !seenDeclarations.contains(trimmed) {
+                    seenDeclarations.insert(trimmed)
+                    declarations.append(trimmed)
+                }
+            }
+
+            // Look for CF_EXPORT functions related to this symbol
+            if trimmed == "CF_EXPORT" && index + 1 < lines.count {
+                let nextLine = lines[index + 1].trimmingCharacters(in: .whitespaces)
+                // Check for key functions (Create, Get, Copy)
+                if nextLine.contains("\(symbol)Create(") || nextLine.contains("\(symbol)Get") ||
+                   nextLine.contains("\(symbol)Copy") {
+                    let declLine = "CF_EXPORT\n\(nextLine)"
+                    if !seenDeclarations.contains(declLine) {
+                        seenDeclarations.insert(declLine)
+                        declarations.append(declLine)
+                    }
+                }
+            }
+        }
+
+        if !declarations.isEmpty {
+            let declText = declarations.prefix(10).joined(separator: "\n\n")
+            let truncated = declarations.count > 10 ? "\n// ... (more declarations)" : ""
+            result.append("\n**Key Declarations:**\n```objc\n\(declText)\(truncated)\n```")
+        }
+
+        return result.count > 4 ? result.joined(separator: "\n") : nil
+    }
+
+    private func searchInterfaceInHeaders(symbol: String, headerPath: String, module: String) async -> String? {
+        // Search for @interface declaration with context for documentation
+        // Use shell with glob pattern instead of grep -r, which has issues with SDK paths
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        // Escape special regex chars in symbol for grep, and escape single quotes for shell
+        let escapedSymbol = symbol.replacingOccurrences(of: "'", with: "'\\''")
+        process.arguments = [
+            "-c",
+            "grep -l '@interface \(escapedSymbol)[ :]' \"\(headerPath)\"/*.h 2>/dev/null || true"
+        ]
+
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+
+        do {
+            try process.run()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+
+            let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+            guard !output.isEmpty else { return nil }
+
+            // Get the first matching file
+            let headerFile = output.components(separatedBy: .newlines).first ?? ""
+            guard !headerFile.isEmpty else { return nil }
+
+            // Read the header file and extract the interface with documentation
+            return await extractInterfaceWithDocs(from: headerFile, symbol: symbol, module: module)
+        } catch {
+            return nil
+        }
+    }
+
+    private func extractInterfaceWithDocs(from headerFile: String, symbol: String, module: String) async -> String? {
+        guard let content = try? String(contentsOfFile: headerFile, encoding: .utf8) else {
+            return nil
+        }
+
+        let lines = content.components(separatedBy: .newlines)
+
+        // Find the @interface line
+        var interfaceLineIndex: Int? = nil
+        for (index, line) in lines.enumerated() {
+            if line.contains("@interface \(symbol)") && (line.contains("@interface \(symbol) ") || line.contains("@interface \(symbol):")) {
+                interfaceLineIndex = index
+                break
+            }
+        }
+
+        guard let startIndex = interfaceLineIndex else { return nil }
+
+        // Look backwards for documentation comments
+        var docComment: [String] = []
+        var searchIndex = startIndex - 1
+
+        // Skip blank lines
+        while searchIndex >= 0 && lines[searchIndex].trimmingCharacters(in: .whitespaces).isEmpty {
+            searchIndex -= 1
+        }
+
+        // Check for doc comment ending with */
+        if searchIndex >= 0 {
+            let line = lines[searchIndex]
+            if line.contains("*/") {
+                // Found end of comment, search backwards for start
+                var commentLines: [String] = []
+                while searchIndex >= 0 {
+                    let commentLine = lines[searchIndex]
+                    commentLines.insert(commentLine, at: 0)
+                    if commentLine.contains("/*") {
+                        break
+                    }
+                    searchIndex -= 1
+                }
+                docComment = commentLines
+            }
+        }
+
+        // Extract the interface declaration (until @end or next @interface)
+        var declaration: [String] = []
+        var braceDepth = 0
+
+        for i in startIndex..<min(startIndex + 100, lines.count) {
+            let line = lines[i]
+            declaration.append(line)
+
+            braceDepth += line.filter { $0 == "{" }.count
+            braceDepth -= line.filter { $0 == "}" }.count
+
+            if line.trimmingCharacters(in: .whitespaces) == "@end" {
+                break
+            }
+
+            // Stop at a reasonable point if we haven't found @end
+            if declaration.count > 50 && braceDepth == 0 {
+                break
+            }
+        }
+
+        // Format the result
+        var result: [String] = ["# \(symbol)"]
+        result.append("**Kind:** Objective-C Class")
+        result.append("**Framework:** \(module)")
+
+        // Extract file name
+        let fileName = (headerFile as NSString).lastPathComponent
+        result.append("**Header:** \(fileName)")
+
+        // Add documentation if found
+        if !docComment.isEmpty {
+            let docText = docComment
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .map { $0.replacingOccurrences(of: "/*!", with: "") }
+                .map { $0.replacingOccurrences(of: "/**", with: "") }
+                .map { $0.replacingOccurrences(of: "/*", with: "") }
+                .map { $0.replacingOccurrences(of: "*/", with: "") }
+                .map { $0.hasPrefix("*") ? String($0.dropFirst()).trimmingCharacters(in: .whitespaces) : $0 }
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n")
+
+            if !docText.isEmpty {
+                result.append("\n**Documentation:**\n\(docText)")
+            }
+        }
+
+        // Add declaration
+        let declText = declaration
+            .prefix(30)
+            .joined(separator: "\n")
+        let truncated = declaration.count > 30 ? "\n// ... (truncated)" : ""
+
+        result.append("\n**Declaration:**\n```objc\n\(declText)\(truncated)\n```")
+
+        return result.joined(separator: "\n")
+    }
+
+    private func formatHeaderSearchResult(output: String, symbol: String, module: String) -> String {
+        let lines = output.components(separatedBy: .newlines)
+
+        // Try to find documentation comments near the symbol
+        var docComment: [String] = []
+        var declaration: [String] = []
+        var inDocComment = false
+        var foundSymbol = false
+
+        for line in lines {
+            // Skip grep line number prefixes like "filename.h-123-"
+            let cleanLine = line.replacingOccurrences(of: #"^[^:]+[:-]\d+[:-]"#, with: "", options: .regularExpression)
+
+            if cleanLine.contains("/*!") || cleanLine.contains("/**") || cleanLine.contains("/*") && cleanLine.contains("*") {
+                inDocComment = true
+                docComment.append(cleanLine)
+            } else if inDocComment {
+                docComment.append(cleanLine)
+                if cleanLine.contains("*/") {
+                    inDocComment = false
+                }
+            }
+
+            if cleanLine.contains(symbol) && !inDocComment {
+                foundSymbol = true
+                declaration.append(cleanLine)
+            } else if foundSymbol && declaration.count < 10 {
+                declaration.append(cleanLine)
+            }
+        }
+
+        var result: [String] = ["# \(symbol)"]
+        result.append("**Framework:** \(module)")
+
+        // Add documentation if found
+        if !docComment.isEmpty {
+            let docText = docComment
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .map { $0.replacingOccurrences(of: "/*!", with: "") }
+                .map { $0.replacingOccurrences(of: "/**", with: "") }
+                .map { $0.replacingOccurrences(of: "*/", with: "") }
+                .map { $0.hasPrefix("*") ? String($0.dropFirst()).trimmingCharacters(in: .whitespaces) : $0 }
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n")
+
+            if !docText.isEmpty {
+                result.append("\n**Documentation:**\n\(docText)")
+            }
+        }
+
+        // Add declaration/matches
+        if !declaration.isEmpty {
+            let declText = declaration.joined(separator: "\n")
+            result.append("\n**Found in headers:**\n```objc\n\(declText)\n```")
+        } else {
+            // Fallback to raw output
+            let truncated = String(output.prefix(2000))
+            let suffix = output.count > 2000 ? "\n... (truncated)" : ""
+            result.append("\n**Found in headers:**\n```objc\n\(truncated)\(suffix)\n```")
+        }
+
+        return result.joined(separator: "\n")
     }
 
     private func searchSymbolInSwiftInterface(module: String, symbol: String, sdkPath: String) async -> String? {
