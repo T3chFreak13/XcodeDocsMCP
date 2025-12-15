@@ -2,20 +2,27 @@ import Foundation
 
 // MARK: - JSON-RPC Types
 
-struct JSONRPCRequest: Codable {
-    let jsonrpc: String
-    let id: RequestID?
-    let method: String
-    let params: AnyCodable?
+public struct JSONRPCRequest: Codable, Sendable {
+    public let jsonrpc: String
+    public let id: RequestID?
+    public let method: String
+    public let params: AnyCodable?
+
+    public init(jsonrpc: String = "2.0", id: RequestID? = nil, method: String, params: AnyCodable? = nil) {
+        self.jsonrpc = jsonrpc
+        self.id = id
+        self.method = method
+        self.params = params
+    }
 }
 
-struct JSONRPCResponse: Codable {
-    let jsonrpc: String
-    let id: RequestID?
-    let result: AnyCodable?
-    let error: JSONRPCError?
+public struct JSONRPCResponse: Codable, Sendable {
+    public let jsonrpc: String
+    public let id: RequestID?
+    public let result: AnyCodable?
+    public let error: JSONRPCError?
 
-    init(id: RequestID?, result: AnyCodable?, error: JSONRPCError?) {
+    public init(id: RequestID?, result: AnyCodable?, error: JSONRPCError?) {
         self.jsonrpc = "2.0"
         self.id = id
         self.result = result
@@ -23,18 +30,24 @@ struct JSONRPCResponse: Codable {
     }
 }
 
-struct JSONRPCError: Codable {
-    let code: Int
-    let message: String
-    let data: AnyCodable?
+public struct JSONRPCError: Codable, Sendable {
+    public let code: Int
+    public let message: String
+    public let data: AnyCodable?
+
+    public init(code: Int, message: String, data: AnyCodable? = nil) {
+        self.code = code
+        self.message = message
+        self.data = data
+    }
 }
 
-enum RequestID: Codable, Equatable {
+public enum RequestID: Codable, Equatable, Sendable {
     case string(String)
     case int(Int)
     case null
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
         if let intValue = try? container.decode(Int.self) {
             self = .int(intValue)
@@ -47,7 +60,7 @@ enum RequestID: Codable, Equatable {
         }
     }
 
-    func encode(to encoder: Encoder) throws {
+    public func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
         switch self {
         case .string(let value):
@@ -62,14 +75,14 @@ enum RequestID: Codable, Equatable {
 
 // MARK: - AnyCodable for dynamic JSON
 
-struct AnyCodable: Codable {
-    let value: Any
+public struct AnyCodable: Codable, Sendable {
+    public let value: any Sendable
 
-    init(_ value: Any) {
+    public init(_ value: any Sendable) {
         self.value = value
     }
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
 
         if container.decodeNil() {
@@ -91,7 +104,7 @@ struct AnyCodable: Codable {
         }
     }
 
-    func encode(to encoder: Encoder) throws {
+    public func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
 
         switch value {
@@ -105,9 +118,9 @@ struct AnyCodable: Codable {
             try container.encode(double)
         case let string as String:
             try container.encode(string)
-        case let array as [Any]:
+        case let array as [any Sendable]:
             try container.encode(array.map { AnyCodable($0) })
-        case let dict as [String: Any]:
+        case let dict as [String: any Sendable]:
             try container.encode(dict.mapValues { AnyCodable($0) })
         default:
             try container.encodeNil()
@@ -118,24 +131,24 @@ struct AnyCodable: Codable {
 // MARK: - MCP Server
 
 @MainActor
-final class MCPServer {
+public final class MCPServer {
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
-    private let serverInfo: [String: Any] = [
+    public let serverInfo: [String: any Sendable] = [
         "name": "xcode-docs-mcp",
         "version": "1.0.0"
     ]
 
-    private let capabilities: [String: Any] = [
-        "tools": [String: Any]()
+    public let capabilities: [String: any Sendable] = [
+        "tools": [String: any Sendable]()
     ]
 
-    init() {
+    public init() {
         encoder.outputFormatting = []
     }
 
-    func run() async {
+    public func run() async {
         // Read from stdin line by line
         while let line = readLine() {
             guard !line.isEmpty else { continue }
@@ -165,7 +178,7 @@ final class MCPServer {
         }
     }
 
-    private func handleRequest(_ request: JSONRPCRequest) async -> JSONRPCResponse? {
+    public func handleRequest(_ request: JSONRPCRequest) async -> JSONRPCResponse? {
         switch request.method {
         case "initialize":
             return JSONRPCResponse(
@@ -174,7 +187,7 @@ final class MCPServer {
                     "protocolVersion": "2024-11-05",
                     "serverInfo": serverInfo,
                     "capabilities": capabilities
-                ]),
+                ] as [String: any Sendable]),
                 error: nil
             )
 
@@ -187,7 +200,7 @@ final class MCPServer {
                 id: request.id,
                 result: AnyCodable([
                     "tools": getToolsList()
-                ]),
+                ] as [String: any Sendable]),
                 error: nil
             )
 
@@ -197,7 +210,7 @@ final class MCPServer {
         case "ping":
             return JSONRPCResponse(
                 id: request.id,
-                result: AnyCodable([String: Any]()),
+                result: AnyCodable([String: any Sendable]()),
                 error: nil
             )
 
@@ -210,7 +223,7 @@ final class MCPServer {
         }
     }
 
-    private func getToolsList() -> [[String: Any]] {
+    public func getToolsList() -> [[String: any Sendable]] {
         return [
             [
                 "name": "search_documentation",
@@ -221,16 +234,16 @@ final class MCPServer {
                         "query": [
                             "type": "string",
                             "description": "Search query (e.g., 'NSWindow', 'SwiftUI View', 'URLSession')"
-                        ],
+                        ] as [String: any Sendable],
                         "limit": [
                             "type": "integer",
                             "description": "Maximum number of results to return (default: 20)",
                             "default": 20
-                        ]
-                    ],
+                        ] as [String: any Sendable]
+                    ] as [String: any Sendable],
                     "required": ["query"]
-                ]
-            ],
+                ] as [String: any Sendable]
+            ] as [String: any Sendable],
             [
                 "name": "get_symbol_info",
                 "description": "Get detailed information about a specific symbol from the SDK using swift-symbolgraph-extract. Returns the symbol's declaration, documentation, and relationships.",
@@ -240,15 +253,15 @@ final class MCPServer {
                         "module": [
                             "type": "string",
                             "description": "The module/framework name (e.g., 'Foundation', 'SwiftUI', 'AppKit')"
-                        ],
+                        ] as [String: any Sendable],
                         "symbol": [
                             "type": "string",
                             "description": "The symbol name to look up (e.g., 'URL', 'View', 'NSWindow')"
-                        ]
-                    ],
+                        ] as [String: any Sendable]
+                    ] as [String: any Sendable],
                     "required": ["module", "symbol"]
-                ]
-            ],
+                ] as [String: any Sendable]
+            ] as [String: any Sendable],
             [
                 "name": "list_frameworks",
                 "description": "List available Apple frameworks/modules in the macOS SDK.",
@@ -258,10 +271,10 @@ final class MCPServer {
                         "filter": [
                             "type": "string",
                             "description": "Optional filter to match framework names (case-insensitive)"
-                        ]
-                    ]
-                ]
-            ],
+                        ] as [String: any Sendable]
+                    ] as [String: any Sendable]
+                ] as [String: any Sendable]
+            ] as [String: any Sendable],
             [
                 "name": "extract_module_symbols",
                 "description": "Extract all public symbols from a module/framework. Useful for discovering available types, functions, and properties.",
@@ -271,23 +284,23 @@ final class MCPServer {
                         "module": [
                             "type": "string",
                             "description": "The module/framework name (e.g., 'Foundation', 'SwiftUI')"
-                        ],
+                        ] as [String: any Sendable],
                         "kind": [
                             "type": "string",
                             "description": "Filter by symbol kind: 'struct', 'class', 'enum', 'protocol', 'func', 'var', or 'all' (default: 'all')",
                             "default": "all"
-                        ]
-                    ],
+                        ] as [String: any Sendable]
+                    ] as [String: any Sendable],
                     "required": ["module"]
-                ]
-            ]
+                ] as [String: any Sendable]
+            ] as [String: any Sendable]
         ]
     }
 
-    private func handleToolCall(_ request: JSONRPCRequest) async -> JSONRPCResponse {
-        guard let params = request.params?.value as? [String: Any],
+    public func handleToolCall(_ request: JSONRPCRequest) async -> JSONRPCResponse {
+        guard let params = request.params?.value as? [String: any Sendable],
               let toolName = params["name"] as? String,
-              let arguments = params["arguments"] as? [String: Any] else {
+              let arguments = params["arguments"] as? [String: any Sendable] else {
             return JSONRPCResponse(
                 id: request.id,
                 result: nil,
@@ -353,16 +366,16 @@ final class MCPServer {
             id: request.id,
             result: AnyCodable([
                 "content": [
-                    ["type": "text", "text": result]
-                ]
-            ]),
+                    ["type": "text", "text": result] as [String: any Sendable]
+                ] as [any Sendable]
+            ] as [String: any Sendable]),
             error: nil
         )
     }
 
     // MARK: - Tool Implementations
 
-    private func searchDocumentation(query: String, limit: Int) async -> String {
+    public func searchDocumentation(query: String, limit: Int) async -> String {
         var allResults: [(path: String, score: Int)] = []
         var headerResults: String? = nil
         var symbolResults: [(framework: String, symbol: String, kind: String)] = []
@@ -461,7 +474,7 @@ final class MCPServer {
         }
     }
 
-    private func calculateRelevanceScore(path: String, query: String) -> Int {
+    public func calculateRelevanceScore(path: String, query: String) -> Int {
         var score = 0
         let lowercasePath = path.lowercased()
         let lowercaseQuery = query.lowercased()
@@ -699,7 +712,7 @@ final class MCPServer {
         }
     }
 
-    private func getSymbolInfo(module: String, symbol: String) async -> String {
+    public func getSymbolInfo(module: String, symbol: String) async -> String {
         // First, try to find the symbol in the module's interface
         let sdkPath = getSDKPath()
 
@@ -775,18 +788,24 @@ final class MCPServer {
                 if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                    let symbols = json["symbols"] as? [[String: Any]] {
 
-                    // Find the requested symbol - prioritize exact matches
-                    var exactMatch: [String: Any]?
+                    // Find the requested symbol - prioritize exact case-sensitive matches
+                    var caseSensitiveMatch: [String: Any]?
+                    var caseInsensitiveMatch: [String: Any]?
                     var partialMatch: [String: Any]?
 
                     for sym in symbols {
                         if let names = sym["names"] as? [String: Any],
                            let title = names["title"] as? String {
 
-                            // Check for exact match first
-                            if title == symbol || title.lowercased() == symbol.lowercased() {
-                                exactMatch = sym
+                            // Exact case-sensitive match is highest priority
+                            if title == symbol {
+                                caseSensitiveMatch = sym
                                 break
+                            }
+
+                            // Case-insensitive exact match (but don't break, keep looking for case-sensitive)
+                            if caseInsensitiveMatch == nil && title.lowercased() == symbol.lowercased() {
+                                caseInsensitiveMatch = sym
                             }
 
                             // Keep first partial match as fallback
@@ -795,6 +814,8 @@ final class MCPServer {
                             }
                         }
                     }
+
+                    let exactMatch = caseSensitiveMatch ?? caseInsensitiveMatch
 
                     // Use exact match if found, otherwise use partial match
                     if let foundSymbol = exactMatch ?? partialMatch {
@@ -887,7 +908,7 @@ final class MCPServer {
         }
     }
 
-    private func listFrameworks(filter: String?) async -> String {
+    public func listFrameworks(filter: String?) async -> String {
         let sdkPath = getSDKPath()
         let frameworksPath = "\(sdkPath)/System/Library/Frameworks"
 
@@ -912,7 +933,7 @@ final class MCPServer {
         }
     }
 
-    private func extractModuleSymbols(module: String, kind: String) async -> String {
+    public func extractModuleSymbols(module: String, kind: String) async -> String {
         let sdkPath = getSDKPath()
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
 
@@ -1000,7 +1021,7 @@ final class MCPServer {
         }
     }
 
-    private func getSDKPath() -> String {
+    public func getSDKPath() -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
         process.arguments = ["--show-sdk-path"]
@@ -1025,15 +1046,5 @@ final class MCPServer {
 
         // Default fallback
         return "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
-    }
-}
-
-// MARK: - Entry Point
-
-@main
-struct XcodeDocsMCPApp {
-    static func main() async {
-        let server = MCPServer()
-        await server.run()
     }
 }

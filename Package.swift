@@ -8,12 +8,23 @@ let package = Package(
         .macOS(.v14)
     ],
     products: [
-        .executable(name: "xcode-docs-mcp", targets: ["XcodeDocsMCP"])
+        .executable(name: "xcode-docs-mcp", targets: ["XcodeDocsMCP"]),
+        .library(name: "XcodeDocsMCPCore", targets: ["XcodeDocsMCPCore"])
     ],
     targets: [
+        .target(
+            name: "XcodeDocsMCPCore",
+            path: "Sources/Core"
+        ),
         .executableTarget(
             name: "XcodeDocsMCP",
-            path: "Sources"
+            dependencies: ["XcodeDocsMCPCore"],
+            path: "Sources/App"
+        ),
+        .testTarget(
+            name: "XcodeDocsMCPTests",
+            dependencies: ["XcodeDocsMCPCore"],
+            path: "Tests"
         )
     ]
 )
